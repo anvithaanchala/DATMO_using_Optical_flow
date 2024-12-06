@@ -10,25 +10,47 @@ def load_config(yaml_file):
     with open(yaml_file, 'r') as file:
         config = yaml.safe_load(file)
     return config
+def generate_elevation_map(points, cell_size, x_range, y_range):
+    x_bins = np.arange(x_range[0], x_range[1], cell_size)
+    y_bins = np.arange(y_range[0], y_range[1], cell_size)
+    elevation_map = np.full((len(x_bins), len(y_bins)), np.nan)
+
+    for x, y, z in points:
+        
+        x_idx = int((x - x_range[0]) / cell_size)
+        y_idx = int((y - y_range[0]) / cell_size)
+
+        if 0 <= x_idx < len(x_bins) and 0 <= y_idx < len(y_bins):
+            if np.isnan(elevation_map[x_idx, y_idx]) or z > elevation_map[x_idx, y_idx]:
+                elevation_map[x_idx, y_idx] = z
+
+    return elevation_map
 
 # Step 1: Preprocess PCD to generate BEV
-def preprocess_pcd_to_bev(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bounds):
+def preprocess_pcd_to_bev(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bounds, ransac):
     # Load the PCD file
     pcd = o3d.io.read_point_cloud(pcd_file)
-    o3d.visualization.draw_geometries([pcd])
-    print("Visualizing original pcd ...")
+    #print("Visualizing original pcd ...")
+    #o3d.visualization.draw_geometries([pcd])
+    
 
     points = np.asarray(pcd.points)
-    
+    a=0.5
+    b=0.5
+    h_max =z_max
     # Flip horizontally
     points[:, 0] = -points[:, 0]
     flipped_pcd = o3d.geometry.PointCloud()
+    flipped_pcd = flipped_pcd.voxel_down_sample(voxel_size=0.05)
     flipped_pcd.points = o3d.utility.Vector3dVector(points)
-    
+
+    #print("Visualizing flipped pcd ...")
+    #o3d.visualization.draw_geometries([flipped_pcd])
+
     # Ground removal using RANSAC
-    distance_threshold = ransac_params['distance_threshold']
-    ransac_n = ransac_params['ransac_n']
-    num_iterations = ransac_params['num_iterations']
+    distance_threshold = ransac['distance_threshold']
+    ransac_n = ransac['ransac_n']
+    num_iterations = ransac['num_iterations']
 
     plane_model, inliers = flipped_pcd.segment_plane(
         distance_threshold=distance_threshold,
@@ -37,11 +59,9 @@ def preprocess_pcd_to_bev(pcd_file, grid_resolution, x_range, y_range, z_max, ro
     )
     non_ground = flipped_pcd.select_by_index(inliers, invert=True)
     non_ground_points = np.asarray(non_ground.points)
-    print("Visualizing non ground points (after ransac)")
-    # Visualize ground-removed point cloud
-    o3d.visualization.draw_geometries([non_ground])
+    #print("Visualizing non-ground points (after RANSAC)...")
+    #o3d.visualization.draw_geometries([non_ground])
 
-    
     # Filter points within ROI
     x_min, x_max, y_min, y_max, z_min, z_max = roi_bounds
     roi_points = non_ground_points[
@@ -50,28 +70,48 @@ def preprocess_pcd_to_bev(pcd_file, grid_resolution, x_range, y_range, z_max, ro
         (non_ground_points[:, 2] >= z_min) & (non_ground_points[:, 2] <= z_max)
     ]
     roi_pcd = o3d.geometry.PointCloud()
-    
-    # Convert numpy array to Open3D format and assign to the point cloud
     roi_pcd.points = o3d.utility.Vector3dVector(roi_points)
-    
-    # Visualize the PointCloud
-    print("Visualizing ROI Points...")
-    o3d.visualization.draw_geometries([roi_pcd])
-    # Generate BEV grid
-    w, h = grid_resolution
+
+    # Visualize ROI Points
+    #print("Visualizing ROI Points...")
+    #o3d.visualization.draw_geometries([roi_pcd])
+
+     # Define BEV grid structure
+    w, h = grid_resolution  # Cell dimensions
     x_bins = np.arange(x_range[0], x_range[1], w)
     y_bins = np.arange(y_range[0], y_range[1], h)
-    bev_grid = np.zeros((len(x_bins), len(y_bins)))
-
-    for x, y, z in roi_points:
+    bev_grid = [[[] for _ in range(len(y_bins))] for _ in range(len(x_bins))]
+    for x, y, z in points:
         x_idx = int((x - x_range[0]) / w)
         y_idx = int((y - y_range[0]) / h)
 
         if 0 <= x_idx < len(x_bins) and 0 <= y_idx < len(y_bins):
-            bev_grid[x_idx, y_idx] = max(bev_grid[x_idx, y_idx], z / z_max)  # Normalize height
+            bev_grid[x_idx][y_idx].append(z)
+
+    bev_values = np.zeros((len(x_bins), len(y_bins)))
+    for i in range(len(x_bins)):
+        for j in range(len(y_bins)):
+            heights = np.array(bev_grid[i][j])
+            if len(heights) > 0:
+                mean_height = np.mean(heights)
+                std_height = np.std(heights)
+                bev_values[i, j] = (a * mean_height + b * std_height) / h_max
+
+            else:
+                bev_values[i, j] = 0
+
+
+    # Visualization of BEV grid
+    plt.figure(figsize=(8, 8))
+    plt.imshow(bev_values.T, cmap='gray', origin='lower', extent=(x_range[0], x_range[1], y_range[0], y_range[1]))
+    plt.colorbar(label="Grayscale Value")
+    plt.title("2.5D BEV Grid")
+    plt.xlabel("X (meters)")
+    plt.ylabel("Y (meters)")
+    plt.grid(color='black')
+    plt.show()
 
     return bev_grid
-
 # Step 2: Compute optical flow between two BEV grids
 def compute_velocity_vectors(bev1, bev2, x_range, y_range):
     farneback_params = dict(
@@ -91,6 +131,18 @@ def compute_velocity_vectors(bev1, bev2, x_range, y_range):
     pixel_size_y = (y_range[1] - y_range[0]) / bev1.shape[0]
     velocity_x = vx * pixel_size_x
     velocity_y = vy * pixel_size_y
+    X, Y = np.meshgrid(
+    np.linspace(x_range[0], x_range[1], bev1.shape[1]),
+    np.linspace(y_range[0], y_range[1], bev1.shape[0])
+)
+    plt.figure(figsize=(10, 10))
+    plt.quiver(X, Y, velocity_x, velocity_y, angles='xy', scale_units='xy', scale=1, color='red')
+    plt.title("Optical Flow Vector Grid")
+    plt.xlabel("X (meters)")
+    plt.ylabel("Y (meters)")
+    plt.grid(color='black')
+    plt.show()
+
 
     return velocity_x, velocity_y
 
@@ -109,7 +161,6 @@ def propagation_mask(vx, vy, dt, grid_shape, grid_size):
             if 0 <= x_new < rows and 0 <= y_new < cols:
                 vx_prop[x_new, y_new] = vx[i, j]
                 vy_prop[x_new, y_new] = vy[i, j]
-
     return vx_prop, vy_prop
 
 
@@ -118,6 +169,14 @@ def rigid_body_continuity_mask(vx, vy, alpha_cont):
     div_v = np.gradient(vx, axis=1) + np.gradient(vy, axis=0)
     curl_v = np.gradient(vy, axis=1) - np.gradient(vx, axis=0)
     mask = (np.abs(div_v) <= alpha_cont) & (np.abs(curl_v) <= alpha_cont)
+    plt.figure(figsize=(8, 8))
+    plt.imshow(mask, cmap='gray', origin='lower')
+    plt.colorbar(label="Mask Value")
+    plt.title("Rigid-Body Continuity Mask")
+    plt.xlabel("X (meters)")
+    plt.ylabel("Y (meters)")
+    plt.grid(color='black')
+    plt.show()
     return mask.astype(int)
 
 # Step 5: Combine everything into a pipeline
@@ -131,6 +190,7 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, config):
     dt = config['dt']
     alpha_p_list = config['masks']['alpha_p']
     alpha_cont_list = config['masks']['alpha_cont']
+    ransac = config['ransac']
 
     # Iterate over all combinations of grid resolutions, alpha_p, and alpha_cont
     for grid_resolution in grid_resolutions:
@@ -139,8 +199,9 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, config):
                 print(f"Processing with grid_resolution={grid_resolution}, alpha_p={alpha_p}, alpha_cont={alpha_cont}")
 
                 # Call your preprocessing and processing pipeline
-                bev1 = preprocess_pcd_to_bev(pcd_file1, grid_resolution, x_range, y_range, z_max, roi_bounds)
-                bev2 = preprocess_pcd_to_bev(pcd_file2, grid_resolution, x_range, y_range, z_max, roi_bounds)
+                bev1 = preprocess_pcd_to_bev(pcd_file1, grid_resolution, x_range, y_range, z_max, roi_bounds, ransac)
+                bev2 = preprocess_pcd_to_bev(pcd_file2, grid_resolution, x_range, y_range, z_max, roi_bounds, ransac)
+
                 velocity_x, velocity_y = compute_velocity_vectors(bev1, bev2, x_range, y_range)
 
                 # Calculate grid shape
@@ -179,4 +240,4 @@ if __name__ == "__main__":
     pcd_file2 = config['pcd_file2']
 
     # Run the pipeline
-    process_and_compare_pcds(pcd_file1, pcd_file2, config)
+    process_and_compare_pcds(pcd_file1, pcd_file2, config).
