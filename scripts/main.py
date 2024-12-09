@@ -45,6 +45,7 @@ def compute_bev_grid(points, grid_resolution, x_range, y_range, a=0.5, b=0.5, h_
 
 def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bounds):
     pcd = o3d.io.read_point_cloud(pcd_file)
+    
     points = np.asarray(pcd.points)
 
     # Flip the point cloud horizontally
@@ -56,6 +57,7 @@ def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bound
     downpcd = flipped_pcd.voxel_down_sample(voxel_size=0.05)
     cl, ind = downpcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
     clean_pcd = downpcd.select_by_index(ind)
+    o3d.visualization.draw_geometries([clean_pcd])
 
     # Ground removal using RANSAC
     plane_model, inliers = clean_pcd.segment_plane(distance_threshold=0.1, ransac_n=3, num_iterations=5000)

@@ -20,8 +20,8 @@ masks:
   alpha_cont: [0.5]
 dt: 1.0
 
-pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0330.pcd"
-pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0360.pcd"
-pcd_file3: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0390.pcd"
+pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0540.pcd"
+pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0570.pcd"
+pcd_file3: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0600.pcd"
 # pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0360.pcd"
 # pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0450.pcd"
