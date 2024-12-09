@@ -13,7 +13,6 @@ def load_config(yaml_file):
         config = yaml.safe_load(file)
     return config
 
-
 # Functions from pdctobev.py
 def filter_points_in_roi(points, roi_bounds):
     x_min, x_max, y_min, y_max, z_min, z_max = roi_bounds
@@ -23,7 +22,7 @@ def filter_points_in_roi(points, roi_bounds):
         (points[:, 2] >= z_min) & (points[:, 2] <= z_max)
     ]
 
-
+# function to compute bev grid
 def compute_bev_grid(points, grid_resolution, x_range, y_range, a=0.5, b=0.5, h_max=5.0):
     w, h = grid_resolution
     x_bins = np.arange(x_range[0], x_range[1], w)
@@ -53,7 +52,7 @@ def compute_bev_grid(points, grid_resolution, x_range, y_range, a=0.5, b=0.5, h_
 
 
     return bev_values
-
+#function to display bev
 def display_bev_grid(bev, x_range, y_range, n):
     """
     Displays a Bird's Eye View (BEV) grid in a subplot.
@@ -70,7 +69,13 @@ def display_bev_grid(bev, x_range, y_range, n):
     plt.title('Bird’s Eye View (BEV)')
     plt.xlabel('X (meters)')
     plt.ylabel('Y (meters)')
-
+#function that converts pcd into bev
+'''
+Flip the pcd 
+Ground plane segmentation 
+Implementing ROI 
+Computing BEV
+'''
 def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bounds):
     pcd = o3d.io.read_point_cloud(pcd_file)
     points = np.asarray(pcd.points)
@@ -79,7 +84,7 @@ def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bound
     points[:, 0] = -points[:, 0]
     flipped_pcd = o3d.geometry.PointCloud()
     flipped_pcd.points = o3d.utility.Vector3dVector(points)
-    o3d.visualization.draw_geometries([flipped_pcd])
+    #o3d.visualization.draw_geometries([flipped_pcd])
 
     # Ground removal using RANSAC
     plane_model, inliers = flipped_pcd.segment_plane(distance_threshold=0.1, ransac_n=3, num_iterations=5000)
@@ -99,8 +104,13 @@ def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bound
     bev_grid = compute_bev_grid(roi_points, grid_resolution, x_range, y_range, h_max=z_max)
 
     return bev_grid
+#function to preprocess bev before generating velocity vector 
 
 
+
+
+
+#function to compute velocity vectors from bev
 def compute_velocity_vectors(bev1, bev2, x_range, y_range,dt):
     farneback_params = dict(
         pyr_scale=0.3,
@@ -141,7 +151,7 @@ def compute_velocity_vectors(bev1, bev2, x_range, y_range,dt):
 
         
     return velocity_x, velocity_y,angular_velocity
-
+#propagation mask
 def propagation_mask(vx, vy, dt, grid_resolution, alpha_p):
     h, w = vx.shape
     propagated_vx = np.zeros_like(vx)
@@ -159,15 +169,13 @@ def propagation_mask(vx, vy, dt, grid_resolution, alpha_p):
     # Compare propagated velocities with actual velocities to generate mask
     mask = (np.abs(propagated_vx - vx) <= alpha_p) & (np.abs(propagated_vy - vy) <= alpha_p)
     return mask.astype(int)
-
+#continuity mask
 def continuity_mask(vx, vy, alpha_cont):
     div_v = np.gradient(vx, axis=1) + np.gradient(vy, axis=0)
     curl_v = np.gradient(vy, axis=1) - np.gradient(vx, axis=0)
     mask = (np.abs(div_v) <= alpha_cont) & (np.abs(curl_v) <= alpha_cont)
     return mask.astype(int)
-
-
-
+#cluster velocity calculation
 def calculate_cluster_velocities(labels, vx_filtered, vy_filtered):
     """
     Calculate average velocity magnitude for each cluster.
@@ -202,8 +210,7 @@ def calculate_cluster_velocities(labels, vx_filtered, vy_filtered):
         cluster_velocities[cluster_id] = avg_velocity
 
     return cluster_velocities
-
-
+#connected component analysis for clustering 
 def connected_components_clustering(valid_mask):
     """
     Perform Connected Component Analysis (CCA) to cluster valid regions.
@@ -219,8 +226,7 @@ def connected_components_clustering(valid_mask):
     num_labels, labels = cv2.connectedComponents(valid_mask.astype(np.uint8), connectivity=8)
 
     return num_labels, labels
-
-
+#function to visualize connected components 
 def visualize_connected_components(labels, vx_filtered, vy_filtered):
     """
     Visualize clusters obtained from Connected Component Analysis.
@@ -260,10 +266,7 @@ def visualize_connected_components(labels, vx_filtered, vy_filtered):
     plt.grid()
     plt.show()
 
-
-
 #---------------------------------------main pipeline------------------------------------------------#
-
 def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
     #getting values from config yaml
     grid_resolution = config['grid_resolution']
@@ -279,6 +282,7 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
     bev1 = preprocess_pcd(pcd_file1, grid_resolution, x_range, y_range, z_max, roi_bounds)
     bev2 = preprocess_pcd(pcd_file2, grid_resolution, x_range, y_range, z_max, roi_bounds)
     bev3 = preprocess_pcd(pcd_file3, grid_resolution, x_range, y_range, z_max, roi_bounds)
+
     plt.figure(figsize=(10, 10))
     display_bev_grid(bev1, x_range, y_range, 1)
     display_bev_grid(bev2, x_range, y_range, 2)
@@ -334,21 +338,19 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
 
         # Find the cluster with the highest average velocity
         if cluster_velocities:
-            max_velocity_cluster = max(cluster_velocities, key=cluster_velocities.get)
-            print(f"Cluster with the highest velocity: {max_velocity_cluster}, Velocity: {cluster_velocities[max_velocity_cluster]:.2f}")
+            mean_velocity_cluster = np.mean(cluster_velocities, key=cluster_velocities.get)
+            print(f"Clusters greater than mean velocity: {mean_velocity_cluster}, Velocity: {cluster_velocities[mean_velocity_cluster]:.2f}")
         else:
             print("No clusters found with significant velocity.")
             return
 
         # Mask only the selected cluster
-        selected_cluster_mask = (labels == max_velocity_cluster)
+        selected_cluster_mask = (labels >= mean_velocity_cluster)
         vx_selected = vx_filtered * selected_cluster_mask
         vy_selected = vx_filtered * selected_cluster_mask
 
-        # Visualize selected clusters with highest velocity
+        # Visualize selected clusters with  velocity greater than the average
         visualize_connected_components(labels, vx_selected, vy_selected)
-
-
 
 if __name__ == "__main__":
     yaml_file = "config/config.yaml"
