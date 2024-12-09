@@ -1,7 +1,7 @@
-grid_resolution: [1.5, 1.5]
-x_range: [-50, 50]
-y_range: [-50, 50]
-z_max: 5.0
+grid_resolution: [0.5, 0.5]
+x_range: [-10, 10]
+y_range: [-15, 15]
+z_max: 1.0
 roi_bounds: [-20, 20, -20, 22.09, -2.4, 1]
 ransac:
   distance_threshold: 0.3
@@ -16,12 +16,14 @@ farneback_params:
   poly_sigma: 1.2
   flags: 0
 masks:
-  alpha_p: [0.5]
-  alpha_cont: [0.5]
+  alpha_p: [0.8]
+  alpha_cont: [0.2]
 dt: 1.0
-
-pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0540.pcd"
-pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0570.pcd"
-pcd_file3: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0600.pcd"
+pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/Varying_velocity_single_target/Varying_velocity_single_target/PCD/lidar_frame_0060.pcd"
+pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/Varying_velocity_single_target/Varying_velocity_single_target/PCD/lidar_frame_0090.pcd"
+pcd_file3: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/Varying_velocity_single_target/Varying_velocity_single_target/PCD/lidar_frame_0120.pcd"
+# pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_1140.pcd"
+# pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_1170.pcd"
+# pcd_file3: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_1200.cd"
 # pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0360.pcd"
 # pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0450.pcd"

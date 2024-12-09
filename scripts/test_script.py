@@ -4,6 +4,7 @@ import cv2
 import matplotlib.pyplot as plt
 import yaml
 import os
+from sklearn.cluster import DBSCAN
 
 
 # Load parameters from YAML
@@ -48,26 +49,37 @@ def compute_bev_grid(points, grid_resolution, x_range, y_range, a=0.5, b=0.5, h_
                 bev_values[i, j] = 0
     
     bev_values = bev_values/bev_values.max()
-    bev_values = (bev_values * h_max).astype(np.uint8)
+    bev_values = (bev_values * 255).astype(np.uint8)
 
 
     return bev_values
 
+def display_bev_grid(bev, x_range, y_range, n):
+    """
+    Displays a Bird's Eye View (BEV) grid in a subplot.
+
+    Parameters:
+    bev (2D array): The grid to be visualized.
+    x_range (tuple): Range of x-axis values (min, max).
+    y_range (tuple): Range of y-axis values (min, max).
+    n (int): Position in the subplot grid (e.g., 1 for top-left in a 2x2 grid).
+    """
+    plt.subplot(2, 2, n)  # Define the subplot layout and position
+    plt.imshow(bev, cmap='gray', origin='lower', extent=(x_range[0], x_range[1], y_range[0], y_range[1]))
+    plt.colorbar(label='G_ij Value')
+    plt.title('Bird’s Eye View (BEV)')
+    plt.xlabel('X (meters)')
+    plt.ylabel('Y (meters)')
 
 def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bounds):
     pcd = o3d.io.read_point_cloud(pcd_file)
-
     points = np.asarray(pcd.points)
 
-    # Flip the point cloud horizontally
+    #Flip the point cloud horizontally
     points[:, 0] = -points[:, 0]
     flipped_pcd = o3d.geometry.PointCloud()
     flipped_pcd.points = o3d.utility.Vector3dVector(points)
-
-    # # Downsample and remove statistical outliers
-    # downpcd = flipped_pcd.voxel_down_sample(voxel_size=0.05)
-    # cl, ind = downpcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-    # clean_pcd = downpcd.select_by_index(ind)
+    o3d.visualization.draw_geometries([flipped_pcd])
 
     # Ground removal using RANSAC
     plane_model, inliers = flipped_pcd.segment_plane(distance_threshold=0.1, ransac_n=3, num_iterations=5000)
@@ -78,7 +90,7 @@ def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bound
     roi_points = filter_points_in_roi(non_ground_points, roi_bounds)
     roi_pcd = o3d.geometry.PointCloud()
     roi_pcd.points = o3d.utility.Vector3dVector(roi_points)
-    o3d.visualization.draw_geometries([roi_pcd])
+    #o3d.visualization.draw_geometries([roi_pcd])
     if roi_points.size == 0:
         print(f"No ROI points for {pcd_file}. Adjust ROI bounds.")
         return None
@@ -115,31 +127,13 @@ def compute_velocity_vectors(bev1, bev2, x_range, y_range,dt):
     angular_velocity = dvy_dx - dvx_dy  # Curl formula
     print(velocity_x)
     print(velocity_y)# Visualize Linear Velocities
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(velocity_x, cmap='coolwarm', origin='lower')
-    plt.colorbar(label="v_x (m/s)")
-    plt.title("Linear Velocity (X)")
-
-    plt.subplot(1, 2, 2)
-    plt.imshow(velocity_y, cmap='coolwarm', origin='lower')
-    plt.colorbar(label="v_y (m/s)")
-    plt.title("Linear Velocity (Y)")
-    plt.show()
-
-    # Visualize Angular Velocity
-    plt.figure(figsize=(6, 6))
-    plt.imshow(angular_velocity, cmap='coolwarm', origin='lower')
-    plt.colorbar(label="Angular Velocity ω_z (rad/s)")
-    plt.title("Angular Velocity (Z)")
-    plt.show()
     X, Y = np.meshgrid(
     np.linspace(x_range[0], x_range[1], velocity_x.shape[1]),
     np.linspace(y_range[0], y_range[1], velocity_x.shape[0])
 )
     plt.figure(figsize=(10, 10))
     plt.quiver(X, Y, velocity_x, velocity_y, angles='xy', scale_units='xy', scale=1, color='blue')
-    plt.title("Velocity Vector Grid Before Continuity Mask")
+    plt.title("Velocity Vector Grid Before Filtering")
     plt.xlabel("X (meters)")
     plt.ylabel("Y (meters)")
     plt.grid(color='black')  # Add gridlines for clarity
@@ -172,8 +166,106 @@ def continuity_mask(vx, vy, alpha_cont):
     mask = (np.abs(div_v) <= alpha_cont) & (np.abs(curl_v) <= alpha_cont)
     return mask.astype(int)
 
-#main pipeline
+
+
+def calculate_cluster_velocities(labels, vx_filtered, vy_filtered):
+    """
+    Calculate average velocity magnitude for each cluster.
+
+    Args:
+        labels (np.ndarray): Cluster labels for each grid cell.
+        vx_filtered (np.ndarray): X-components of velocity vectors.
+        vy_filtered (np.ndarray): Y-components of velocity vectors.
+
+    Returns:
+        dict: A dictionary with cluster IDs as keys and average velocities as values.
+    """
+    cluster_velocities = {}
+    unique_labels = np.unique(labels)
+
+    for cluster_id in unique_labels:
+        if cluster_id == 0:  # Ignore background (label 0 typically represents background)
+            continue
+
+        # Extract points in the current cluster
+        cluster_mask = (labels == cluster_id)
+        vx_cluster = vx_filtered[cluster_mask]
+        vy_cluster = vy_filtered[cluster_mask]
+
+        if vx_cluster.size == 0 or vy_cluster.size == 0:
+            continue  # Skip empty clusters
+
+        # Compute velocity magnitude
+        velocities = np.sqrt(vx_cluster**2 + vy_cluster**2)
+        avg_velocity = np.mean(velocities)
+
+        cluster_velocities[cluster_id] = avg_velocity
+
+    return cluster_velocities
+
+
+def connected_components_clustering(valid_mask):
+    """
+    Perform Connected Component Analysis (CCA) to cluster valid regions.
+
+    Args:
+        valid_mask (np.ndarray): Binary mask of valid velocity regions.
+
+    Returns:
+        num_labels (int): Number of connected components found.
+        labels (np.ndarray): Label matrix where each unique value corresponds to a connected component.
+    """
+    # Apply connected component analysis
+    num_labels, labels = cv2.connectedComponents(valid_mask.astype(np.uint8), connectivity=8)
+
+    return num_labels, labels
+
+
+def visualize_connected_components(labels, vx_filtered, vy_filtered):
+    """
+    Visualize clusters obtained from Connected Component Analysis.
+
+    Args:
+        labels (np.ndarray): Label matrix from connected components.
+        vx_filtered (np.ndarray): X-components of velocity vectors.
+        vy_filtered (np.ndarray): Y-components of velocity vectors.
+    """
+    unique_labels = np.unique(labels)
+
+    plt.figure(figsize=(10, 10))
+    for cluster_id in unique_labels:
+        if cluster_id == 0:  # Background (label 0)
+            continue
+
+        # Extract cluster points
+        cluster_mask = (labels == cluster_id)
+        cluster_y, cluster_x = np.nonzero(cluster_mask)  # Get grid coordinates
+        cluster_vx = vx_filtered[cluster_mask]
+        cluster_vy = vy_filtered[cluster_mask]
+
+        if cluster_vx.size == 0 or cluster_vy.size == 0:
+            continue  # Skip empty clusters
+
+        # Visualize the velocity vectors in this cluster
+        plt.quiver(
+            cluster_x, cluster_y,  # Grid coordinates
+            cluster_vx, cluster_vy,  # Velocity vectors
+            angles='xy', scale_units='xy', scale=1, label=f"Cluster {cluster_id}"
+        )
+
+    plt.title("Clusters from Connected Component Analysis")
+    plt.xlabel("X (grid cells)")
+    plt.ylabel("Y (grid cells)")
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+
+
+#---------------------------------------main pipeline------------------------------------------------#
+
 def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
+    #getting values from config yaml
     grid_resolution = config['grid_resolution']
     x_range = config['x_range']
     y_range = config['y_range']
@@ -187,26 +279,11 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
     bev1 = preprocess_pcd(pcd_file1, grid_resolution, x_range, y_range, z_max, roi_bounds)
     bev2 = preprocess_pcd(pcd_file2, grid_resolution, x_range, y_range, z_max, roi_bounds)
     bev3 = preprocess_pcd(pcd_file3, grid_resolution, x_range, y_range, z_max, roi_bounds)
-    plt.figure(figsize=(20, 20))
-    plt.subplot(2, 2, 1)
-    plt.imshow(bev1, cmap='gray', origin='lower', extent=(x_range[0], x_range[1], y_range[0], y_range[1]))
-    plt.colorbar(label='G_ij Value')
-    plt.title('Bird’s Eye View (BEV)')
-    plt.xlabel('X (meters)')
-    plt.ylabel('Y (meters)')
-    plt.subplot(2, 2, 2)
-    plt.imshow(bev2, cmap='gray', origin='lower', extent=(x_range[0], x_range[1], y_range[0], y_range[1]))
-    plt.colorbar(label='G_ij Value')
-    plt.title('Bird’s Eye View (BEV)')
-    plt.xlabel('X (meters)')
-    plt.ylabel('Y (meters)')
-    plt.show()
-    plt.subplot(2, 2, 3)
-    plt.imshow(bev3, cmap='gray', origin='lower', extent=(x_range[0], x_range[1], y_range[0], y_range[1]))
-    plt.colorbar(label='G_ij Value')
-    plt.title('Bird’s Eye View (BEV)')
-    plt.xlabel('X (meters)')
-    plt.ylabel('Y (meters)')
+    plt.figure(figsize=(10, 10))
+    display_bev_grid(bev1, x_range, y_range, 1)
+    display_bev_grid(bev2, x_range, y_range, 2)
+    display_bev_grid(bev3, x_range, y_range, 3)
+    plt.tight_layout()  # Adjust spacing between subplots
     plt.show()
 
     #checking difference in bevs as velocity vectors are not being generated 
@@ -214,18 +291,10 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
     diff2 = np.abs(bev2 - bev3)
     print("Difference between BEV grids 1 and 2 :", np.sum(diff1))
     print("Difference between BEV grids:", np.sum(diff2))
-    plt.figure(figsize=(10,10))
-    plt.subplot(1,2,1)
-    plt.imshow(diff1, cmap='gray')
-    plt.title("Difference between BEV1 and BEV2")
-    plt.subplot(1,2,2)
-    plt.imshow(diff2, cmap='gray')
-    plt.title("Difference between BEV2 and BEV3")
-    plt.show()
 
 
     if bev1 is not None and bev2 is not None and bev3 is not None:
-    # Compute velocities for frames 1->2 and 2->3
+        # Compute velocities for frames 1->2 and 2->3
         velocity_x1, velocity_y1, _ = compute_velocity_vectors(bev1, bev2, x_range, y_range, dt)
         velocity_x2, velocity_y2, _ = compute_velocity_vectors(bev2, bev3, x_range, y_range, dt)
 
@@ -237,47 +306,47 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
 
         # Combine masks
         combined_mask = cont_mask * prop_mask
-        #combined_mask =  prop_mask
-
-        # Filter velocity vectors
         vx_filtered = velocity_x2 * combined_mask
         vy_filtered = velocity_y2 * combined_mask
+        velocity_magnitude = np.sqrt(vx_filtered**2 + vy_filtered**2)
+        threshold = 0.1  # Define a velocity threshold (tune as needed)
+        valid_mask = velocity_magnitude > threshold  # Keep only vectors with significant motion
 
-        # Visualization
+        vx_filtered = vx_filtered * valid_mask
+        vy_filtered = vy_filtered * valid_mask
         X, Y = np.meshgrid(
-            np.linspace(x_range[0], x_range[1], bev1.shape[1]),
-            np.linspace(y_range[0], y_range[1], bev1.shape[0])
-        )
+        np.linspace(x_range[0], x_range[1], vx_filtered.shape[1]),
+        np.linspace(y_range[0], y_range[1], vy_filtered.shape[0])
+    )
         plt.figure(figsize=(10, 10))
-        plt.quiver(
-            X, Y, vx_filtered, vy_filtered,
-            angles='xy', scale_units='xy', scale=1, color='blue'
-        )
-        plt.title("Filtered Velocity Vectors with Combined Mask")
+        plt.quiver(X, Y, vy_filtered, vy_filtered, angles='xy', scale_units='xy', scale=1, color='blue')
+        plt.title("Velocity Vector Grid After Filtering")
         plt.xlabel("X (meters)")
         plt.ylabel("Y (meters)")
-        plt.grid(color='black')
+        plt.grid(color='black')  # Add gridlines for clarity
         plt.show()
 
+        # Perform Connected Component Analysis
+        num_labels, labels = connected_components_clustering(combined_mask)
 
- 
+        # Calculate cluster velocities
+        cluster_velocities = calculate_cluster_velocities(labels, vx_filtered, vy_filtered)
 
-    # if bev1 is not None and bev2 is not None and bev3 is not None:
-    #     velocity_x, velocity_y, angular_velocity = compute_velocity_vectors(bev1, bev2, x_range, y_range)
-    #     cont_mask = continuity_mask(velocity_x, velocity_y, alpha_cont)
-    #     div_v = np.gradient(velocity_x, axis=1) + np.gradient(velocity_y, axis=0)
-    #     curl_v = np.gradient(velocity_y, axis=1) - np.gradient(velocity_x, axis=0)
+        # Find the cluster with the highest average velocity
+        if cluster_velocities:
+            max_velocity_cluster = max(cluster_velocities, key=cluster_velocities.get)
+            print(f"Cluster with the highest velocity: {max_velocity_cluster}, Velocity: {cluster_velocities[max_velocity_cluster]:.2f}")
+        else:
+            print("No clusters found with significant velocity.")
+            return
 
-    # #     plt.imshow(div_v, cmap='gray')
-    # #     plt.title("Divergence")
-    # #     plt.colorbar()
-    # #     plt.show()
+        # Mask only the selected cluster
+        selected_cluster_mask = (labels == max_velocity_cluster)
+        vx_selected = vx_filtered * selected_cluster_mask
+        vy_selected = vx_filtered * selected_cluster_mask
 
-    # #     plt.imshow(curl_v, cmap='gray')
-    # #     plt.title("Curl")
-    # #     plt.colorbar()
-    # #     plt.show()
-
+        # Visualize selected clusters with highest velocity
+        visualize_connected_components(labels, vx_selected, vy_selected)
 
 
 
