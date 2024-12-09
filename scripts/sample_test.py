@@ -2,242 +2,124 @@ import numpy as np
 import open3d as o3d
 import cv2
 import matplotlib.pyplot as plt
-import yaml
 import os
+import yaml
+from utils import *
 
 # Load parameters from YAML
 def load_config(yaml_file):
     with open(yaml_file, 'r') as file:
         config = yaml.safe_load(file)
     return config
-def generate_elevation_map(points, cell_size, x_range, y_range):
-    x_bins = np.arange(x_range[0], x_range[1], cell_size)
-    y_bins = np.arange(y_range[0], y_range[1], cell_size)
-    elevation_map = np.full((len(x_bins), len(y_bins)), np.nan)
 
-    for x, y, z in points:
-        
-        x_idx = int((x - x_range[0]) / cell_size)
-        y_idx = int((y - y_range[0]) / cell_size)
+# Multi-plane detection
+def DetectMultiPlanes(points, min_ratio=0.05, threshold=0.01, iterations=1000):
+    plane_list = []
+    N = len(points)
+    target = points.copy()
+    count = 0
 
-        if 0 <= x_idx < len(x_bins) and 0 <= y_idx < len(y_bins):
-            if np.isnan(elevation_map[x_idx, y_idx]) or z > elevation_map[x_idx, y_idx]:
-                elevation_map[x_idx, y_idx] = z
+    while count < (1 - min_ratio) * N:
+        w, index = PlaneRegression(
+            target, threshold=threshold, init_n=3, iter=iterations)
+        count += len(index)
+        plane_list.append((w, target[index]))
+        target = np.delete(target, index, axis=0)
+    return plane_list
 
-    return elevation_map
-
-# Step 1: Preprocess PCD to generate BEV
-def preprocess_pcd_to_bev(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bounds, ransac):
-    # Load the PCD file
-    pcd = o3d.io.read_point_cloud(pcd_file)
-    #print("Visualizing original pcd ...")
-    #o3d.visualization.draw_geometries([pcd])
-    
-
-    points = np.asarray(pcd.points)
-    a=0.5
-    b=0.5
-    h_max =z_max
-    # Flip horizontally
-    points[:, 0] = -points[:, 0]
-    flipped_pcd = o3d.geometry.PointCloud()
-    flipped_pcd = flipped_pcd.voxel_down_sample(voxel_size=0.05)
-    flipped_pcd.points = o3d.utility.Vector3dVector(points)
-
-    #print("Visualizing flipped pcd ...")
-    #o3d.visualization.draw_geometries([flipped_pcd])
-
-    # Ground removal using RANSAC
-    distance_threshold = ransac['distance_threshold']
-    ransac_n = ransac['ransac_n']
-    num_iterations = ransac['num_iterations']
-
-    plane_model, inliers = flipped_pcd.segment_plane(
-        distance_threshold=distance_threshold,
-        ransac_n=ransac_n,
-        num_iterations=num_iterations
-    )
-    non_ground = flipped_pcd.select_by_index(inliers, invert=True)
-    non_ground_points = np.asarray(non_ground.points)
-    #print("Visualizing non-ground points (after RANSAC)...")
-    #o3d.visualization.draw_geometries([non_ground])
-
-    # Filter points within ROI
-    x_min, x_max, y_min, y_max, z_min, z_max = roi_bounds
-    roi_points = non_ground_points[
-        (non_ground_points[:, 0] >= x_min) & (non_ground_points[:, 0] <= x_max) &
-        (non_ground_points[:, 1] >= y_min) & (non_ground_points[:, 1] <= y_max) &
-        (non_ground_points[:, 2] >= z_min) & (non_ground_points[:, 2] <= z_max)
-    ]
-    roi_pcd = o3d.geometry.PointCloud()
-    roi_pcd.points = o3d.utility.Vector3dVector(roi_points)
-
-    # Visualize ROI Points
-    #print("Visualizing ROI Points...")
-    #o3d.visualization.draw_geometries([roi_pcd])
-
-     # Define BEV grid structure
-    w, h = grid_resolution  # Cell dimensions
+# BEV grid computation
+def compute_bev_grid(points, grid_resolution, x_range, y_range, a=0.5, b=0.5, h_max=5.0):
+    w, h = grid_resolution
     x_bins = np.arange(x_range[0], x_range[1], w)
     y_bins = np.arange(y_range[0], y_range[1], h)
-    bev_grid = [[[] for _ in range(len(y_bins))] for _ in range(len(x_bins))]
+    bev_values = np.zeros((len(x_bins), len(y_bins)))
+
     for x, y, z in points:
         x_idx = int((x - x_range[0]) / w)
         y_idx = int((y - y_range[0]) / h)
-
         if 0 <= x_idx < len(x_bins) and 0 <= y_idx < len(y_bins):
-            bev_grid[x_idx][y_idx].append(z)
+            bev_values[x_idx, y_idx] += (a * z + b * np.std(z)) / h_max
+    return bev_values
 
-    bev_values = np.zeros((len(x_bins), len(y_bins)))
-    for i in range(len(x_bins)):
-        for j in range(len(y_bins)):
-            heights = np.array(bev_grid[i][j])
-            if len(heights) > 0:
-                mean_height = np.mean(heights)
-                std_height = np.std(heights)
-                bev_values[i, j] = (a * mean_height + b * std_height) / h_max
-
-            else:
-                bev_values[i, j] = 0
-
-
-    # Visualization of BEV grid
-    plt.figure(figsize=(8, 8))
-    plt.imshow(bev_values.T, cmap='gray', origin='lower', extent=(x_range[0], x_range[1], y_range[0], y_range[1]))
-    plt.colorbar(label="Grayscale Value")
-    plt.title("2.5D BEV Grid")
-    plt.xlabel("X (meters)")
-    plt.ylabel("Y (meters)")
-    plt.grid(color='black')
-    plt.show()
-
-    return bev_grid
-# Step 2: Compute optical flow between two BEV grids
+# Compute velocity using optical flow
 def compute_velocity_vectors(bev1, bev2, x_range, y_range):
-    farneback_params = dict(
-        pyr_scale=0.5,
-        levels=3,
-        winsize=15,
-        iterations=3,
-        poly_n=5,
-        poly_sigma=1.2,
-        flags=0,
-    )
+    farneback_params = {
+        'pyr_scale': 0.5,
+        'levels': 3,
+        'winsize': 15,
+        'iterations': 3,
+        'poly_n': 5,
+        'poly_sigma': 1.2,
+        'flags': 0,
+    }
     flow = cv2.calcOpticalFlowFarneback(bev1.astype(np.float32), bev2.astype(np.float32), None, **farneback_params)
     vx, vy = flow[..., 0], flow[..., 1]
 
-    # Convert flow to real-world velocities
     pixel_size_x = (x_range[1] - x_range[0]) / bev1.shape[1]
     pixel_size_y = (y_range[1] - y_range[0]) / bev1.shape[0]
     velocity_x = vx * pixel_size_x
     velocity_y = vy * pixel_size_y
-    X, Y = np.meshgrid(
-    np.linspace(x_range[0], x_range[1], bev1.shape[1]),
-    np.linspace(y_range[0], y_range[1], bev1.shape[0])
-)
-    plt.figure(figsize=(10, 10))
-    plt.quiver(X, Y, velocity_x, velocity_y, angles='xy', scale_units='xy', scale=1, color='red')
-    plt.title("Optical Flow Vector Grid")
-    plt.xlabel("X (meters)")
-    plt.ylabel("Y (meters)")
-    plt.grid(color='black')
-    plt.show()
-
 
     return velocity_x, velocity_y
 
-# Step 3: Apply propagation mask
-def propagation_mask(vx, vy, dt, grid_shape, grid_size):
-    rows, cols = grid_shape
-    cell_height, cell_width = grid_size
-    vx_prop = np.zeros_like(vx)
-    vy_prop = np.zeros_like(vy)
+# Apply propagation and continuity masks
+def apply_masks(vx, vy, dt, alpha_cont):
+    grid_shape = vx.shape
+    vx_prop, vy_prop = np.zeros_like(vx), np.zeros_like(vy)
 
-    for i in range(rows):
-        for j in range(cols):
-            x_new = i + int(vx[i, j] * dt / cell_height + 0.5)
-            y_new = j + int(vy[i, j] * dt / cell_width + 0.5)
-
-            if 0 <= x_new < rows and 0 <= y_new < cols:
+    for i in range(grid_shape[0]):
+        for j in range(grid_shape[1]):
+            x_new = i + int(vx[i, j] * dt)
+            y_new = j + int(vy[i, j] * dt)
+            if 0 <= x_new < grid_shape[0] and 0 <= y_new < grid_shape[1]:
                 vx_prop[x_new, y_new] = vx[i, j]
                 vy_prop[x_new, y_new] = vy[i, j]
-    return vx_prop, vy_prop
 
-
-# Step 4: Apply rigid-body continuity mask
-def rigid_body_continuity_mask(vx, vy, alpha_cont):
-    div_v = np.gradient(vx, axis=1) + np.gradient(vy, axis=0)
-    curl_v = np.gradient(vy, axis=1) - np.gradient(vx, axis=0)
+    div_v = np.gradient(vx_prop, axis=1) + np.gradient(vy_prop, axis=0)
+    curl_v = np.gradient(vy_prop, axis=1) - np.gradient(vx_prop, axis=0)
     mask = (np.abs(div_v) <= alpha_cont) & (np.abs(curl_v) <= alpha_cont)
-    plt.figure(figsize=(8, 8))
-    plt.imshow(mask, cmap='gray', origin='lower')
-    plt.colorbar(label="Mask Value")
-    plt.title("Rigid-Body Continuity Mask")
-    plt.xlabel("X (meters)")
-    plt.ylabel("Y (meters)")
-    plt.grid(color='black')
-    plt.show()
-    return mask.astype(int)
+    return vx_prop * mask, vy_prop * mask, mask
 
-# Step 5: Combine everything into a pipeline
-def process_and_compare_pcds(pcd_file1, pcd_file2, config):
-    # Extract parameters
-    grid_resolutions = config['grid_resolution']
+# Main pipeline
+def process_and_visualize(pcd_file1, pcd_file2, config):
+    grid_resolution = config['grid_resolution']
     x_range = config['x_range']
     y_range = config['y_range']
     z_max = config['z_max']
     roi_bounds = config['roi_bounds']
     dt = config['dt']
-    alpha_p_list = config['masks']['alpha_p']
-    alpha_cont_list = config['masks']['alpha_cont']
-    ransac = config['ransac']
+    alpha_cont = config['masks']['alpha_cont'][0]
 
-    # Iterate over all combinations of grid resolutions, alpha_p, and alpha_cont
-    for grid_resolution in grid_resolutions:
-        for alpha_p in alpha_p_list:
-            for alpha_cont in alpha_cont_list:
-                print(f"Processing with grid_resolution={grid_resolution}, alpha_p={alpha_p}, alpha_cont={alpha_cont}")
+    # Process PCD files
+    points1 = np.asarray(o3d.io.read_point_cloud(pcd_file1).points)
+    points2 = np.asarray(o3d.io.read_point_cloud(pcd_file2).points)
 
-                # Call your preprocessing and processing pipeline
-                bev1 = preprocess_pcd_to_bev(pcd_file1, grid_resolution, x_range, y_range, z_max, roi_bounds, ransac)
-                bev2 = preprocess_pcd_to_bev(pcd_file2, grid_resolution, x_range, y_range, z_max, roi_bounds, ransac)
+    # Detect planes and generate BEV
+    planes1 = DetectMultiPlanes(points1)
+    planes2 = DetectMultiPlanes(points2)
 
-                velocity_x, velocity_y = compute_velocity_vectors(bev1, bev2, x_range, y_range)
+    bev1 = compute_bev_grid(points1, grid_resolution, x_range, y_range, h_max=z_max)
+    bev2 = compute_bev_grid(points2, grid_resolution, x_range, y_range, h_max=z_max)
 
-                # Calculate grid shape
-                grid_shape = (
-                    int((x_range[1] - x_range[0]) / grid_resolution[0]),
-                    int((y_range[1] - y_range[0]) / grid_resolution[1])
-                )
-                grid_size = (grid_resolution[0], grid_resolution[1])
+    velocity_x, velocity_y = compute_velocity_vectors(bev1, bev2, x_range, y_range)
+    vx_prop, vy_prop, mask = apply_masks(velocity_x, velocity_y, dt, alpha_cont)
 
-                vx_prop, vy_prop = propagation_mask(velocity_x, velocity_y, dt, grid_shape, grid_size)
-                mask = rigid_body_continuity_mask(velocity_x, velocity_y, alpha_cont)
+    # Visualization
+    plt.figure(figsize=(10, 10))
+    plt.quiver(np.arange(x_range[0], x_range[1], grid_resolution[0]),
+               np.arange(y_range[0], y_range[1], grid_resolution[1]),
+               vx_prop, vy_prop, angles='xy', scale_units='xy', scale=1, color='blue')
+    plt.title("Velocity Vectors with Continuity Mask")
+    plt.xlabel("X (meters)")
+    plt.ylabel("Y (meters)")
+    plt.grid(color='black')
+    plt.show()
 
-                # Visualization or further processing as needed
-                plt.figure(figsize=(10, 10))
-                plt.quiver(
-                    np.linspace(x_range[0], x_range[1], bev1.shape[1]),
-                    np.linspace(y_range[0], y_range[1], bev1.shape[0]),
-                    vx_prop * mask, vy_prop * mask,
-                    angles='xy', scale_units='xy', scale=1, color='blue'
-                )
-                plt.title(f"Velocity Vectors with Masks (grid_resolution={grid_resolution}, alpha_p={alpha_p}, alpha_cont={alpha_cont})")
-                plt.xlabel("X (meters)")
-                plt.ylabel("Y (meters)")
-                plt.grid(color='black')
-                plt.show()
-
-
-# Main script
 if __name__ == "__main__":
-    # Load YAML configuration
-    yaml_file = r"config/config.yaml"  
+    yaml_file = "config/config.yaml"
     config = load_config(yaml_file)
 
-    # File paths for PCD files
     pcd_file1 = config['pcd_file1']
     pcd_file2 = config['pcd_file2']
 
-    # Run the pipeline
-    process_and_compare_pcds(pcd_file1, pcd_file2, config).
+    process_and_visualize(pcd_file1, pcd_file2, config)

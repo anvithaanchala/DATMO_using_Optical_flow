@@ -1,9 +1,8 @@
-grid_resolution:
-  - [1,1]
+grid_resolution: [1.5, 1.5]
 x_range: [-50, 50]
 y_range: [-50, 50]
-z_max: 10.0
-roi_bounds: [-20, 20, -5, 22.09, -2.4, 1]
+z_max: 5.0
+roi_bounds: [-20, 20, -20, 22.09, -2.4, 1]
 ransac:
   distance_threshold: 0.3
   ransac_n: 3
@@ -20,5 +19,9 @@ masks:
   alpha_p: [0.5]
   alpha_cont: [0.5]
 dt: 1.0
-pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0030.pcd"
-pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0090.pcd"
+
+pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0330.pcd"
+pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0360.pcd"
+pcd_file3: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0390.pcd"
+# pcd_file1: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0360.pcd"
+# pcd_file2: "C:/Users/anvit/Desktop/Desktop/Fall_24/MR/Project/DATMO/GT2/test_2_GT_PCD/test_2_GT_PCD/lidar_frame_0450.pcd"

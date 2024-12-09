@@ -1,5 +1,5 @@
-s#Step 1 : RANSAC , Flip it horizontally 
-#STep 2 : Filter out roi 
+#Step 1 : RANSAC , Flip it horizontally 
+#Step 2 : Filter out roi 
 #Step 3 : Generate elevation map
 #Step 4 : compute bev grid 
 
@@ -22,21 +22,6 @@ def filter_points_in_roi(points, roi_bounds):
         (points[:, 2] >= z_min) & (points[:, 2] <= z_max)    # Z bounds
     ]
 
-def generate_elevation_map(points, cell_size, x_range, y_range):
-    x_bins = np.arange(x_range[0], x_range[1], cell_size)
-    y_bins = np.arange(y_range[0], y_range[1], cell_size)
-    elevation_map = np.full((len(x_bins), len(y_bins)), np.nan)
-
-    for x, y, z in points:
-        
-        x_idx = int((x - x_range[0]) / cell_size)
-        y_idx = int((y - y_range[0]) / cell_size)
-
-        if 0 <= x_idx < len(x_bins) and 0 <= y_idx < len(y_bins):
-            if np.isnan(elevation_map[x_idx, y_idx]) or z > elevation_map[x_idx, y_idx]:
-                elevation_map[x_idx, y_idx] = z
-
-    return elevation_map
 
 def compute_bev_grid(points, grid_resolution, x_range, y_range, a=0.5, b=0.5, h_max=5.0):
     w, h = grid_resolution
@@ -75,19 +60,11 @@ def preprocess_pcd(pcd_file,grid_resolution,x_range,y_range,z_max,roi_bounds,out
     flipped_pcd.points = o3d.utility.Vector3dVector(points)
     o3d.visualization.draw_geometries([flipped_pcd])
     #downsampling and statistical outlier removal 
-    print("Downsample the point cloud with a voxel of 0.05")
-    downpcd = flipped_pcd.voxel_down_sample(voxel_size=0.05)
-    #visualizing down sampled pcd
-    o3d.visualization.draw_geometries([downpcd])
     print("Statistical oulier removal")
     cl, ind = downpcd.remove_statistical_outlier(nb_neighbors=20,std_ratio=2.0)
     o3d.visualization.draw_geometries([cl])
     #RANSAC 
     plane_model, inliers = cl.segment_plane(distance_threshold = 0.1 , ransac_n =3 , num_iterations = 5000)
-    #plane_model, inliers = flipped_pcd.segment_plane(distance_threshold = 0.2 , ransac_n =3 , num_iterations = 5000)
-    #plane_model, inliers = flipped_pcd.segment_plane(distance_threshold = 0.3 , ransac_n =3 , num_iterations = 5000)
-    #plane_model, inliers = flipped_pcd.segment_plane(distance_threshold = 0.4 , ransac_n =3 , num_iterations = 5000)
-    #plane_model, inliers = flipped_pcd.segment_plane(distance_threshold = 0.5 , ransac_n =3 , num_iterations = 5000)
     non_ground = flipped_pcd.select_by_index(inliers , invert =True)
     non_ground_points = np.asarray(non_ground.points)
     print(non_ground_points)
