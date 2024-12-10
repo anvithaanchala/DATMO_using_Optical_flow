@@ -6,6 +6,8 @@ import yaml
 import os
 from sklearn.cluster import DBSCAN
 from matplotlib import cm
+from matplotlib.path import Path
+from shapely.geometry import Polygon, Point
 
 
 # Load parameters from YAML
@@ -105,11 +107,11 @@ def select_road_endpoints(bev, x_range, y_range):
     """
     plt.figure(figsize=(10, 10))
     plt.imshow(bev, cmap='gray', origin='lower', extent=(x_range[0], x_range[1], y_range[0], y_range[1]))
-    plt.title("Select Two Endpoints Defining the Road")
+    plt.title("Select four Endpoints Defining the Road")
     plt.xlabel("X (meters)")
     plt.ylabel("Y (meters)")
 
-    points = plt.ginput(2)  # Allow user to click two points
+    points = plt.ginput(4)  # Allow user to click two points
     plt.close()
 
     print(f"Selected Points: {points}")
@@ -348,7 +350,9 @@ def calculate_dbscan_cluster_velocities(labels, valid_indices, vx_filtered, vy_f
         cluster_velocities[cluster_id] = avg_velocity
 
     return cluster_velocities
-def filter_clusters_by_roi(db_labels, valid_indices, velocity_grid, valid_mask, road_indices):
+
+
+def filter_clusters_by_roi(db_labels, valid_indices, velocity_grid, valid_mask, road_polygon):
     """
     Filter DBSCAN clusters based on the road-defined ROI.
 
@@ -356,38 +360,43 @@ def filter_clusters_by_roi(db_labels, valid_indices, velocity_grid, valid_mask, 
         db_labels (np.ndarray): Cluster labels from DBSCAN.
         valid_indices (np.ndarray): Spatial indices of valid grid cells.
         velocity_grid (tuple): Velocity grid components (vx, vy).
-        valid_mask (np.ndarray): Binary mask of valid velocity vectors.
-        road_indices (list): Two indices defining the road region [(row1, col1), (row2, col2)].
+        valid_mask (np.ndarray): Valid motion mask.
+        road_polygon (Polygon): Shapely Polygon defining the road.
 
     Returns:
-        tuple: Filtered cluster labels, filtered indices, and velocity components (vx, vy).
+        tuple: Filtered labels, indices, and velocity components (vx, vy).
     """
-    (row1, col1), (row2, col2) = road_indices
-    min_row, max_row = min(row1, row2), max(row1, row2)
-    min_col, max_col = min(col1, col2), max(col1, col2)
+    from shapely.geometry import Point
 
-    # Filter valid indices and corresponding labels
-    roi_mask = (
-        (valid_indices[:, 0] >= min_row) & (valid_indices[:, 0] <= max_row) &
-        (valid_indices[:, 1] >= min_col) & (valid_indices[:, 1] <= max_col)
-    )
+    # Initialize filtered results
+    filtered_indices = []
+    filtered_labels = []
+    filtered_vx = []
+    filtered_vy = []
 
-    # Apply mask to valid_indices and labels
-    filtered_indices = valid_indices[roi_mask]
-    filtered_labels = db_labels[roi_mask]
+    # Iterate over valid_indices and check if points are within the road_polygon
+    for idx, (row, col) in enumerate(valid_indices):
+        point = Point(col, row)
+        if road_polygon.contains(point):
+            filtered_indices.append(valid_indices[idx])
+            filtered_labels.append(db_labels[idx])
+            filtered_vx.append(velocity_grid[0][row, col])
+            filtered_vy.append(velocity_grid[1][row, col])
 
-    # Apply mask to velocity components
-    valid_vx = velocity_grid[0][valid_mask]  # Extract valid vx
-    valid_vy = velocity_grid[1][valid_mask]  # Extract valid vy
-    vx_filtered = valid_vx[roi_mask]  # Filtered vx
-    vy_filtered = valid_vy[roi_mask]  # Filtered vy
+    # Convert results to numpy arrays
+    filtered_indices = np.array(filtered_indices)
+    filtered_labels = np.array(filtered_labels)
+    filtered_vx = np.array(filtered_vx)
+    filtered_vy = np.array(filtered_vy)
 
-    return filtered_labels, filtered_indices, vx_filtered, vy_filtered
+    return filtered_labels, filtered_indices, filtered_vx, filtered_vy
+
+
 
 
 def visualize_filtered_clusters(labels, indices, vx, vy, x_range, y_range, grid_resolution_x, grid_resolution_y):
     """
-    Visualize the filtered DBSCAN clusters on the velocity vector grid and overlay average velocities.
+    Visualize the filtered DBSCAN clusters on the velocity vector grid.
 
     Args:
         labels (np.ndarray): Filtered cluster labels.
@@ -401,17 +410,16 @@ def visualize_filtered_clusters(labels, indices, vx, vy, x_range, y_range, grid_
     """
     plt.figure(figsize=(10, 10))
     unique_labels = np.unique(labels)
-    colormap = plt.cm.get_cmap("tab10", len(unique_labels))
 
-    # Dictionary to store average velocities for each cluster
-    cluster_velocities = {}
+    # Use a predefined colormap with sufficient unique colors
+    colormap = cm.get_cmap("tab10")  # Use a colormap with 10 colors
 
     for idx, cluster_id in enumerate(unique_labels):
         if cluster_id == -1:
             color = "gray"
             label = "Noise"
         else:
-            color = colormap(idx % 10)
+            color = colormap(idx % 10)  # Cycle through the colormap
             label = f"Cluster {cluster_id}"
 
         cluster_mask = labels == cluster_id
@@ -419,12 +427,6 @@ def visualize_filtered_clusters(labels, indices, vx, vy, x_range, y_range, grid_
         cluster_vx = vx[cluster_mask]
         cluster_vy = vy[cluster_mask]
 
-        # Calculate average velocity magnitude for the cluster
-        velocity_magnitude = np.sqrt(cluster_vx**2 + cluster_vy**2)
-        avg_velocity = np.mean(velocity_magnitude) if len(velocity_magnitude) > 0 else 0
-        cluster_velocities[cluster_id] = avg_velocity
-
-        # Plot velocity vectors for the cluster
         plt.quiver(
             cluster_points[:, 1] * grid_resolution_x + x_range[0],  # Convert grid index to meters
             cluster_points[:, 0] * grid_resolution_y + y_range[0],
@@ -432,31 +434,32 @@ def visualize_filtered_clusters(labels, indices, vx, vy, x_range, y_range, grid_
             angles="xy", scale_units="xy", scale=1, color=color, label=label
         )
 
-        # Annotate the cluster with average velocity
-        if cluster_id != -1 and len(cluster_points) > 0:
-            cluster_centroid_x = np.mean(cluster_points[:, 1]) * grid_resolution_x + x_range[0]
-            cluster_centroid_y = np.mean(cluster_points[:, 0]) * grid_resolution_y + y_range[0]
+        # Annotate the velocity for each cluster
+        if cluster_id != -1 and len(cluster_vx) > 0:
+            avg_velocity = np.sqrt(np.mean(cluster_vx**2 + cluster_vy**2))
+            cluster_centroid_x = np.mean(cluster_points[:, 1] * grid_resolution_x + x_range[0])
+            cluster_centroid_y = np.mean(cluster_points[:, 0] * grid_resolution_y + y_range[0])
             plt.text(
                 cluster_centroid_x,
                 cluster_centroid_y,
-                f"Vel: {avg_velocity:.2f} m/s",
+                f"ID: {cluster_id}\nVel: {avg_velocity:.2f}",
                 color="black",
                 fontsize=8,
                 ha="center"
             )
 
-    # Add legend dynamically
     max_legend_entries = 10
     if len(unique_labels) <= max_legend_entries:
         plt.legend(loc="upper right")
     else:
-        print(f"Too many clusters ({len(unique_labels)}) for legend display. Showing only visualization.")
+        print(f"Too many clusters ({len(unique_labels)}) for legend display. Showing visualization only.")
 
     plt.title("Filtered DBSCAN Clusters with Velocities")
     plt.xlabel("X (meters)")
     plt.ylabel("Y (meters)")
-    plt.grid(color='black', linestyle='--', linewidth=0.5)
+    plt.grid()
     plt.show()
+
 
 
 
@@ -485,14 +488,17 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
     plt.show()
 
     # Select road endpoints on the BEV
-    print("Select the two road endpoints in the BEV:")
+    print("Select four points defining the road boundary:")
     road_endpoints = select_road_endpoints(bev1, x_range, y_range)
-    print(f"Selected road endpoints: {road_endpoints}")
 
     # Map the selected road endpoints to velocity grid indices
     grid_res_x, grid_res_y = grid_resolution
     road_indices = map_points_to_velocity_grid(road_endpoints, x_range, y_range, grid_res_x, grid_res_y)
     print(f"Mapped road indices to velocity grid: {road_indices}")
+
+    # Create a polygon from road_indices for ROI filtering
+    road_polygon = Polygon([(col, row) for row, col in road_indices])
+
 
     # Compute velocity vectors for frames 1->2 and 2->3
     velocity_x1, velocity_y1, _ = compute_velocity_vectors(bev1, bev2, x_range, y_range, dt)
@@ -509,14 +515,29 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
 
     vx_filtered = vx_filtered * valid_mask
     vy_filtered = vy_filtered * valid_mask
+    X, Y = np.meshgrid(
+    np.linspace(x_range[0], x_range[1], vx_filtered.shape[1]),
+    np.linspace(y_range[0], y_range[1], vx_filtered.shape[0])
+)
+    #plotting filtered velocities 
+    plt.figure(figsize=(10, 10))
+    plt.quiver(X, Y, vx_filtered, vy_filtered, angles='xy', scale_units='xy', scale=1, color='blue')
+    plt.title("Velocity Vector Grid After Filtering")
+    plt.xlabel("X (meters)")
+    plt.ylabel("Y (meters)")
+    plt.grid(color='black')  # Add gridlines for clarity
+    plt.show()
 
     # Perform DBSCAN clustering
-    db_labels, valid_indices = dbscan_clustering(vx_filtered, vy_filtered, valid_mask, eps=3.0, min_samples=3)
+    db_labels, valid_indices = dbscan_clustering(vx_filtered, vy_filtered, valid_mask, eps=5.0, min_samples=3)
 
     # Filter DBSCAN clusters based on the road-defined ROI
+# Filter DBSCAN clusters based on the road-defined ROI
     filtered_labels, filtered_indices, vx_roi, vy_roi = filter_clusters_by_roi(
-    db_labels, valid_indices, (vx_filtered, vy_filtered), valid_mask, road_indices
+    db_labels, valid_indices, (vx_filtered, vy_filtered), valid_mask, road_polygon
 )
+
+
 
     print(f"valid_mask shape: {valid_mask.shape}")
     print(f"valid_indices shape: {valid_indices.shape}")
