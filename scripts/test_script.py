@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import yaml
 import os
 from sklearn.cluster import DBSCAN
+from matplotlib import cm
 
 
 # Load parameters from YAML
@@ -125,7 +126,7 @@ def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bound
     expanded_points = increase_point_density(roi_points, expansion_factor=10, noise_std=0.01)
     expanded_pcd = o3d.geometry.PointCloud()
     expanded_pcd.points = o3d.utility.Vector3dVector(expanded_points)
-    o3d.visualization.draw_geometries([expanded_pcd])
+    #o3d.visualization.draw_geometries([expanded_pcd])
     # Generate BEV grid
     bev_grid = compute_bev_grid(expanded_points, grid_resolution, x_range, y_range, h_max=z_max)
 
@@ -309,6 +310,7 @@ def dbscan_clustering(vx_filtered, vy_filtered, valid_mask, eps=1.0, min_samples
 
     Returns:
         np.ndarray: Cluster labels for each valid point (-1 for noise).
+        np.ndarray: Indices of valid points in the original grid.
     """
     # Get the indices of valid points
     valid_indices = np.array(np.nonzero(valid_mask)).T
@@ -324,6 +326,41 @@ def dbscan_clustering(vx_filtered, vy_filtered, valid_mask, eps=1.0, min_samples
     clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(features)
 
     return clustering.labels_, valid_indices
+def calculate_dbscan_cluster_velocities(labels, valid_indices, vx_filtered, vy_filtered):
+    """
+    Calculate velocities for each DBSCAN cluster.
+
+    Args:
+        labels (np.ndarray): Cluster labels for each valid point (-1 for noise).
+        valid_indices (np.ndarray): Indices of valid points in the original grid.
+        vx_filtered (np.ndarray): X-components of velocity vectors.
+        vy_filtered (np.ndarray): Y-components of velocity vectors.
+
+    Returns:
+        dict: A dictionary with cluster IDs as keys and average velocities as values.
+    """
+    cluster_velocities = {}
+    unique_labels = np.unique(labels)
+
+    for cluster_id in unique_labels:
+        if cluster_id == -1:  # Skip noise points
+            continue
+
+        # Get the indices of points belonging to this cluster
+        cluster_points = valid_indices[labels == cluster_id]
+
+        # Extract the velocity components for the cluster
+        vx_cluster = vx_filtered[cluster_points[:, 0], cluster_points[:, 1]]
+        vy_cluster = vy_filtered[cluster_points[:, 0], cluster_points[:, 1]]
+
+        # Calculate the average velocity magnitude for the cluster
+        velocity_magnitude = np.sqrt(vx_cluster**2 + vy_cluster**2)
+        avg_velocity = np.mean(velocity_magnitude)
+
+        cluster_velocities[cluster_id] = avg_velocity
+
+    return cluster_velocities
+
 
 #---------------------------------------main pipeline------------------------------------------------#
 def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
@@ -389,48 +426,55 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
         plt.grid(color='black')  # Add gridlines for clarity
         plt.show()
 
-        # Perform Connected Component Analysis
-        num_labels, labels = connected_components_clustering(combined_mask)
+        # # Perform Connected Component Analysis
+        # num_labels, labels = connected_components_clustering(combined_mask)
 
-        # Calculate cluster velocities
-        cluster_velocities = calculate_cluster_velocities(labels, vx_filtered, vy_filtered)
+        # # Calculate cluster velocities
+        # cluster_velocities = calculate_cluster_velocities(labels, vx_filtered, vy_filtered)
 
-        # Find the cluster with the highest average velocity
-        if cluster_velocities:
-            mean_velocity_cluster = np.mean(list(cluster_velocities.values()))
-            print(f"Mean velocity: {mean_velocity_cluster:.2f}")
-            clusters_above_mean = {cluster_id: velocity for cluster_id, velocity in cluster_velocities.items() if velocity > mean_velocity_cluster}
+        # # Find the cluster with the highest average velocity
+        # if cluster_velocities:
+        #     mean_velocity_cluster = np.mean(list(cluster_velocities.values()))
+        #     print(f"Mean velocity: {mean_velocity_cluster:.2f}")
+        #     clusters_above_mean = {cluster_id: velocity for cluster_id, velocity in cluster_velocities.items() if velocity > mean_velocity_cluster}
 
-            if clusters_above_mean:
-                print("Clusters with velocities greater than the mean:")
-                for cluster_id, velocity in clusters_above_mean.items():
-                    print(f"Cluster {cluster_id}: Velocity = {velocity:.2f}")
-            else:
-                print("No clusters with velocities greater than the mean velocity.")
+        #     if clusters_above_mean:
+        #         print("Clusters with velocities greater than the mean:")
+        #         for cluster_id, velocity in clusters_above_mean.items():
+        #             print(f"Cluster {cluster_id}: Velocity = {velocity:.2f}")
+        #     else:
+        #         print("No clusters with velocities greater than the mean velocity.")
 
-        # Mask only the selected cluster
-        selected_cluster_mask = (labels >= mean_velocity_cluster)
-        vx_selected = vx_filtered * selected_cluster_mask
-        vy_selected = vx_filtered * selected_cluster_mask
+        # # Mask only the selected cluster
+        # selected_cluster_mask = (labels >= mean_velocity_cluster)
+        # vx_selected = vx_filtered * selected_cluster_mask
+        # vy_selected = vx_filtered * selected_cluster_mask
 
-        # Visualize selected clusters with  velocity greater than the average
-        visualize_connected_components(labels, vx_filtered, vy_filtered)
-            # Perform DBSCAN clustering
+        # # Visualize selected clusters with  velocity greater than the average
+        # visualize_connected_components(labels, vx_filtered, vy_filtered)
+        '''--------------------------------------------------#Perform DBSCAN clustering----------------------------------------------'''
+        # Perform DBSCAN clustering
         db_labels, valid_indices = dbscan_clustering(vx_filtered, vy_filtered, valid_mask, eps=3.0, min_samples=3)
         unique_labels = np.unique(db_labels)
-        num_clusters = len(unique_labels[unique_labels != -1])  # Exclude noise (-1)
 
         # Print the number of clusters
+        num_clusters = len(unique_labels) - (1 if -1 in db_labels else 0)
         print(f"Number of clusters obtained by DBSCAN: {num_clusters}")
+
         # Visualize the DBSCAN clusters
-        plt.figure(figsize=(10, 10))
-        unique_labels = np.unique(db_labels)
-        for cluster_id in unique_labels:
-            if cluster_id == -1:  # Noise
-                color = 'gray'
-                label = 'Noise'
+        plt.figure(figsize=(12, 12))
+
+        # Generate a colormap using `matplotlib.cm`
+        from matplotlib import cm
+        colormap = cm.get_cmap("tab10", len(unique_labels))  # Use `tab10` colormap for clusters
+
+        # Loop through each cluster
+        for idx, cluster_id in enumerate(unique_labels):
+            if cluster_id == -1:  # Noise points
+                color = "gray"
+                label = "Noise"
             else:
-                color = np.random.rand(3,)  # Random color for each cluster
+                color = colormap(idx % 10)[:3]  # Get RGB values for color
                 label = f"Cluster {cluster_id}"
 
             # Extract cluster points
@@ -446,12 +490,34 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
                 angles="xy", scale_units="xy", scale=1, color=color, label=label
             )
 
-        plt.title("DBSCAN Clusters on Velocity Vector Grid")
+            # Calculate and annotate the average velocity
+            if cluster_id != -1 and len(cluster_vx) > 0:
+                avg_velocity = np.sqrt(np.mean(cluster_vx**2 + cluster_vy**2))
+                cluster_centroid_x = np.mean(cluster_points[:, 1])
+                cluster_centroid_y = np.mean(cluster_points[:, 0])
+                plt.text(
+                    cluster_centroid_x,
+                    cluster_centroid_y,
+                    f"ID: {cluster_id}\nVel: {avg_velocity:.2f}",
+                    color="black",
+                    fontsize=8,
+                    ha="center"
+                )
+
+        # Add legend dynamically if clusters are not too many
+        max_legend_entries = 10
+        if len(unique_labels) <= max_legend_entries:  # Display legend only if number of clusters is manageable
+            plt.legend(loc="upper right")
+        else:
+            print(f"Too many clusters ({len(unique_labels)}) for legend display. Showing only visualization.")
+
+        plt.title("DBSCAN Clusters with Velocities")
         plt.xlabel("X (grid cells)")
         plt.ylabel("Y (grid cells)")
-        plt.legend()
-        plt.grid()
+        plt.grid(color='black', linestyle='--', linewidth=0.5)
         plt.show()
+
+
 
 if __name__ == "__main__":
     yaml_file = "config/config.yaml"
