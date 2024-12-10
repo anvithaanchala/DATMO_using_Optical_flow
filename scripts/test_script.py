@@ -21,6 +21,26 @@ def filter_points_in_roi(points, roi_bounds):
         (points[:, 1] >= y_min) & (points[:, 1] <= y_max) &
         (points[:, 2] >= z_min) & (points[:, 2] <= z_max)
     ]
+def increase_point_density(points, expansion_factor=2, noise_std=0.01):
+    """
+    Increases the density of a point cloud by replicating points with small perturbations.
+
+    Args:
+        points (np.ndarray): Original point cloud (N x 3).
+        expansion_factor (int): Number of times each point is replicated.
+        noise_std (float): Standard deviation of random noise added to replicated points.
+
+    Returns:
+        np.ndarray: Expanded point cloud with increased density.
+    """
+    # Replicate each point 'expansion_factor' times
+    replicated_points = np.repeat(points, expansion_factor, axis=0)
+
+    # Add small random noise for perturbation
+    noise = np.random.normal(scale=noise_std, size=replicated_points.shape)
+    expanded_points = replicated_points + noise
+
+    return expanded_points
 
 # function to compute bev grid
 def compute_bev_grid(points, grid_resolution, x_range, y_range, a=0.5, b=0.5, h_max=5.0):
@@ -81,7 +101,10 @@ def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bound
     points = np.asarray(pcd.points)
 
     #Flip the point cloud horizontally
-    points[:, 0] = -points[:, 0]
+    # Flip the point cloud both vertically and horizontally
+    points[:, 0] = -points[:, 0]  # Flip horizontally (X-axis)
+    #points[:, 1] = -points[:, 1]  # Flip vertically (Y-axis)
+
     flipped_pcd = o3d.geometry.PointCloud()
     flipped_pcd.points = o3d.utility.Vector3dVector(points)
     #o3d.visualization.draw_geometries([flipped_pcd])
@@ -99,9 +122,12 @@ def preprocess_pcd(pcd_file, grid_resolution, x_range, y_range, z_max, roi_bound
     if roi_points.size == 0:
         print(f"No ROI points for {pcd_file}. Adjust ROI bounds.")
         return None
-
+    expanded_points = increase_point_density(roi_points, expansion_factor=10, noise_std=0.01)
+    expanded_pcd = o3d.geometry.PointCloud()
+    expanded_pcd.points = o3d.utility.Vector3dVector(expanded_points)
+    o3d.visualization.draw_geometries([expanded_pcd])
     # Generate BEV grid
-    bev_grid = compute_bev_grid(roi_points, grid_resolution, x_range, y_range, h_max=z_max)
+    bev_grid = compute_bev_grid(expanded_points, grid_resolution, x_range, y_range, h_max=z_max)
 
     return bev_grid
 #function to preprocess bev before generating velocity vector 
@@ -229,7 +255,7 @@ def connected_components_clustering(valid_mask):
 #function to visualize connected components 
 def visualize_connected_components(labels, vx_filtered, vy_filtered):
     """
-    Visualize clusters obtained from Connected Component Analysis.
+    Visualize clusters obtained from Connected Component Analysis with different colors.
 
     Args:
         labels (np.ndarray): Label matrix from connected components.
@@ -237,9 +263,12 @@ def visualize_connected_components(labels, vx_filtered, vy_filtered):
         vy_filtered (np.ndarray): Y-components of velocity vectors.
     """
     unique_labels = np.unique(labels)
-
     plt.figure(figsize=(10, 10))
-    for cluster_id in unique_labels:
+
+    # Generate a colormap with unique colors for each cluster
+    colors = plt.cm.tab20(np.linspace(0, 1, len(unique_labels)))
+
+    for idx, cluster_id in enumerate(unique_labels):
         if cluster_id == 0:  # Background (label 0)
             continue
 
@@ -256,15 +285,45 @@ def visualize_connected_components(labels, vx_filtered, vy_filtered):
         plt.quiver(
             cluster_x, cluster_y,  # Grid coordinates
             cluster_vx, cluster_vy,  # Velocity vectors
-            angles='xy', scale_units='xy', scale=1, label=f"Cluster {cluster_id}"
+            angles="xy", scale_units="xy", scale=1, color=colors[idx % len(colors)],
+            label=f"Cluster {cluster_id}"
         )
 
-    plt.title("Clusters from Connected Component Analysis")
+    plt.title("Clusters from Connected Component Analysis with Colors")
     plt.xlabel("X (grid cells)")
     plt.ylabel("Y (grid cells)")
     plt.legend()
     plt.grid()
     plt.show()
+#dbscan for clustering 
+def dbscan_clustering(vx_filtered, vy_filtered, valid_mask, eps=1.0, min_samples=5):
+    """
+    Perform DBSCAN clustering on velocity vectors.
+
+    Args:
+        vx_filtered (np.ndarray): X-components of velocity vectors.
+        vy_filtered (np.ndarray): Y-components of velocity vectors.
+        valid_mask (np.ndarray): Binary mask of valid velocity vectors.
+        eps (float): The maximum distance between two samples for one to be considered as in the neighborhood.
+        min_samples (int): The number of samples in a neighborhood for a point to be considered a core point.
+
+    Returns:
+        np.ndarray: Cluster labels for each valid point (-1 for noise).
+    """
+    # Get the indices of valid points
+    valid_indices = np.array(np.nonzero(valid_mask)).T
+
+    # Get the corresponding velocity components
+    valid_vx = vx_filtered[valid_mask]
+    valid_vy = vy_filtered[valid_mask]
+
+    # Combine spatial and velocity features
+    features = np.column_stack((valid_indices, valid_vx, valid_vy))
+
+    # Apply DBSCAN
+    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(features)
+
+    return clustering.labels_, valid_indices
 
 #---------------------------------------main pipeline------------------------------------------------#
 def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
@@ -338,11 +397,16 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
 
         # Find the cluster with the highest average velocity
         if cluster_velocities:
-            mean_velocity_cluster = np.mean(cluster_velocities, key=cluster_velocities.get)
-            print(f"Clusters greater than mean velocity: {mean_velocity_cluster}, Velocity: {cluster_velocities[mean_velocity_cluster]:.2f}")
-        else:
-            print("No clusters found with significant velocity.")
-            return
+            mean_velocity_cluster = np.mean(list(cluster_velocities.values()))
+            print(f"Mean velocity: {mean_velocity_cluster:.2f}")
+            clusters_above_mean = {cluster_id: velocity for cluster_id, velocity in cluster_velocities.items() if velocity > mean_velocity_cluster}
+
+            if clusters_above_mean:
+                print("Clusters with velocities greater than the mean:")
+                for cluster_id, velocity in clusters_above_mean.items():
+                    print(f"Cluster {cluster_id}: Velocity = {velocity:.2f}")
+            else:
+                print("No clusters with velocities greater than the mean velocity.")
 
         # Mask only the selected cluster
         selected_cluster_mask = (labels >= mean_velocity_cluster)
@@ -350,7 +414,44 @@ def process_and_compare_pcds(pcd_file1, pcd_file2, pcd_file3, config):
         vy_selected = vx_filtered * selected_cluster_mask
 
         # Visualize selected clusters with  velocity greater than the average
-        visualize_connected_components(labels, vx_selected, vy_selected)
+        visualize_connected_components(labels, vx_filtered, vy_filtered)
+            # Perform DBSCAN clustering
+        db_labels, valid_indices = dbscan_clustering(vx_filtered, vy_filtered, valid_mask, eps=3.0, min_samples=3)
+        unique_labels = np.unique(db_labels)
+        num_clusters = len(unique_labels[unique_labels != -1])  # Exclude noise (-1)
+
+        # Print the number of clusters
+        print(f"Number of clusters obtained by DBSCAN: {num_clusters}")
+        # Visualize the DBSCAN clusters
+        plt.figure(figsize=(10, 10))
+        unique_labels = np.unique(db_labels)
+        for cluster_id in unique_labels:
+            if cluster_id == -1:  # Noise
+                color = 'gray'
+                label = 'Noise'
+            else:
+                color = np.random.rand(3,)  # Random color for each cluster
+                label = f"Cluster {cluster_id}"
+
+            # Extract cluster points
+            cluster_mask = db_labels == cluster_id
+            cluster_points = valid_indices[cluster_mask]  # Spatial indices for the cluster
+            cluster_vx = vx_filtered[valid_mask][cluster_mask]
+            cluster_vy = vy_filtered[valid_mask][cluster_mask]
+
+            # Plot the velocity vectors for this cluster
+            plt.quiver(
+                cluster_points[:, 1], cluster_points[:, 0],  # Grid indices
+                cluster_vx, cluster_vy,
+                angles="xy", scale_units="xy", scale=1, color=color, label=label
+            )
+
+        plt.title("DBSCAN Clusters on Velocity Vector Grid")
+        plt.xlabel("X (grid cells)")
+        plt.ylabel("Y (grid cells)")
+        plt.legend()
+        plt.grid()
+        plt.show()
 
 if __name__ == "__main__":
     yaml_file = "config/config.yaml"

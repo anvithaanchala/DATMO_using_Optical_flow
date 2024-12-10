@@ -1,8 +1,8 @@
-grid_resolution: [0.3, 0.3]
+grid_resolution: [0.2, 0.2]
 x_range: [-20,20]
 y_range: [-20, 20]
 z_max: 1.0
-roi_bounds: [-20, 20, -20, 22.09, -2.4, 1]
+roi_bounds: [-15, 15, -7, 7, -2.4, 1]
 ransac:
   distance_threshold: 0.3
   ransac_n: 3
