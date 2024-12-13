@@ -7,7 +7,7 @@ System Info
 Project Description
 
 
-How to Run Simulation Scripts files 
+How to Run Simulation Scripts
 
 Requirements 
 
