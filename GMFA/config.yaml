@@ -1,0 +1,38 @@
+input_folder: "C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Single-target-Truck/PCD"
+output_folder: "C://Users//anvit//OneDrive//Documents//GitHub//DATMO_using_Optical_flow//output_folder"
+grid_resolution: [0.2, 0.2]
+x_range: [-20,20]
+y_range: [-20, 20]
+z_max: 2.0
+roi_bounds: [-20, 20, -20, 20, -3, 3]
+ransac:
+  distance_threshold: 0.3
+  ransac_n: 3
+  num_iterations: 5000
+farneback_params:
+  pyr_scale: 0.7
+  levels: 3
+  winsize: 15
+  iterations: 3
+  poly_n: 5
+  poly_sigma: 1.2
+  flags: 0
+masks:
+  alpha_p: [0.8]
+  alpha_cont: [0.2]
+dt: 1.0
+dbscan_params:
+    eps: 5.0
+    min_samples: 3
+
+pcd_files:
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_930.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_960.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_990.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_1020.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_1050.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_1080.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_1110.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_1140.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_1170.pcd
+  - C:/Users/anvit/OneDrive/Documents/GitHub/DATMO_using_Optical_flow/dataset/Varying_velocity_single_target/PCD/lidar_frame_1200.pcd
