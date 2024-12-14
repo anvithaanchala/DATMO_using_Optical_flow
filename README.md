@@ -32,10 +32,10 @@ open3d
 cv2
 math
 
-To run the code qe
-
-
-How to run Optical Flow files 
-
+How to run Optical Flow files :
+1.Go to Optical_flow folder 
+2.Change the parameters according to your dataset 
+3.Run main.py 
+4.Use saving_utils.py in case you want to save your bev , velocity vector grids , DBSCAN clusters and EKF tracked outputs
 
 How to run GMFA code  files 
