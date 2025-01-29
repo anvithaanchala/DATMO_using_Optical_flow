@@ -1,8 +1,3 @@
-# DATMO_using_Optical_flow
-
-
-Names: Venkata Satya Naga Sai Karthik kodur
-System Info 
 
 Project Description
 
